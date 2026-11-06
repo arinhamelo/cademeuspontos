@@ -198,13 +198,30 @@ async function handleApi(request, env) {
       if (!row) return json({ error: 'Compra não encontrada.' }, 404);
       const body = JSON.parse(row.body);
       if (request.method === 'PUT') {
-        const clean = validPurchase({ ...body, ...input, id: body.id, attachmentData: '' });
+        const clean = validPurchase({ ...body, ...input, id: body.id, attachmentData: input.attachmentData || '' });
         if (!clean) return json({ error: 'Confira os dados do lançamento.' }, 400);
-        const next = { ...clean.body, status: body.status, createdAt: body.createdAt };
-        if (body.received !== undefined) next.received = Math.min(Number(body.received), next.expected);
-        next.expected = next.amount * next.factor;
-        if (next.received !== undefined) next.status = next.received >= next.expected ? 'received' : 'pending';
-        await env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(next), Date.now(), purchaseMatch[1], email).run();
+        const next = { ...clean.body, createdAt: body.createdAt };
+        const receivedTotal = Number(input.received ?? body.received ?? 0);
+        if (!Number.isFinite(receivedTotal) || receivedTotal < 0 || receivedTotal > next.expected) return json({ error: 'Os pontos recebidos não podem ser negativos nem superar o total esperado.' }, 400);
+        if (receivedTotal >= next.expected - 0.000001) {
+          next.status = 'received'; next.received = next.expected;
+        } else {
+          next.status = 'pending';
+          if (receivedTotal > 0) next.received = receivedTotal; else delete next.received;
+        }
+        let attachmentBytes = null, contentType = '';
+        if (clean.attachmentData) {
+          const match = clean.attachmentData.match(/^data:(application\/pdf|image\/png);base64,([a-zA-Z0-9+/=]+)$/);
+          if (!match) return json({ error: 'O anexo precisa ser um PDF ou PNG válido.' }, 400);
+          const decoded = atob(match[2]);
+          if (decoded.length > MAX_ATTACHMENT_BYTES) return json({ error: 'O anexo deve ter até 1 MB.' }, 400);
+          attachmentBytes = Uint8Array.from(decoded, c => c.charCodeAt(0)); contentType = match[1];
+          if (!next.attachment) next.attachment = contentType === 'application/pdf' ? 'regulamento.pdf' : 'regulamento.png';
+        } else if (input.removeAttachment === true) next.attachment = '';
+        const statements = [env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(next), Date.now(), purchaseMatch[1], email)];
+        if (attachmentBytes || input.removeAttachment === true) statements.push(env.DB.prepare('DELETE FROM attachments WHERE purchase_id = ? AND email = ?').bind(purchaseMatch[1], email));
+        if (attachmentBytes) statements.push(env.DB.prepare('INSERT INTO attachments (purchase_id, email, name, content_type, data, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(purchaseMatch[1], email, next.attachment, contentType, attachmentBytes, Date.now()));
+        try { await env.DB.batch(statements); } catch { return json({ error: 'Não foi possível atualizar o lançamento.' }, 500); }
         return json(next);
       }
       if (input.receivedTotal !== undefined) {
