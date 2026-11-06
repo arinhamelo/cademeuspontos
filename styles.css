@@ -8,3 +8,5 @@
 @media(max-width:400px){.compact-row>summary{grid-template-columns:minmax(0,1fr) 76px 14px;gap:6px 9px}.compact-store{grid-column:1;grid-row:1}.compact-program{grid-column:1;grid-row:2}.compact-points{grid-column:1;grid-row:3;justify-self:start;text-align:left}.compact-points small{display:inline;margin-left:4px}.compact-status{grid-column:1;grid-row:4}.row-actions{grid-column:2;grid-row:2 / span 3;gap:5px}.compact-row>summary:after{grid-column:2;grid-row:1}}
 
 .receipt-choice{display:grid;gap:10px}.receipt-choice .btn{width:100%}.quick-edit:focus-visible,.quick-check:focus-visible{outline:3px solid #d6b4e9;outline-offset:2px}
+
+.remove-attachment{display:flex;align-items:center;gap:8px;margin-top:8px;color:#6d6574;font-size:12px}.remove-attachment input{accent-color:var(--purple)}
