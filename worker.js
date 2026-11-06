@@ -207,7 +207,13 @@ async function handleApi(request, env) {
         await env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(next), Date.now(), purchaseMatch[1], email).run();
         return json(next);
       }
-      if (input.receivedNow !== undefined) {
+      if (input.receivedTotal !== undefined) {
+        const total = Number(input.receivedTotal), expected = Number(body.expected);
+        if (!Number.isFinite(total) || total < 0 || total > expected) return json({ error: `Informe o total recebido entre 0 e ${Math.ceil(expected)} pontos.` }, 400);
+        body.received = total;
+        body.status = total >= expected - 0.000001 ? 'received' : 'pending';
+        if (total === 0) delete body.received;
+      } else if (input.receivedNow !== undefined) {
         const amount = Number(input.receivedNow), current = Number(body.received || 0), left = Math.max(0, Number(body.expected) - current);
         if (!Number.isFinite(amount) || amount <= 0 || amount > left + 0.000001) return json({ error: `Informe um valor entre 1 e ${Math.ceil(left)} pontos.` }, 400);
         body.received = Math.min(Number(body.expected), current + amount);
