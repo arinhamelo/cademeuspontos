@@ -235,7 +235,7 @@ function staticResponse(path) {
   const name = path === '/' ? '/index.html' : path;
   const contentType = { '/index.html': 'text/html; charset=utf-8', '/styles.css': 'text/css; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8', '/pontos-mark.svg': 'image/svg+xml' }[name];
   if (!contentType || !Object.hasOwn(siteFiles, name)) return new Response('Not found', { status: 404 });
-  return new Response(siteFiles[name], { headers: { 'Content-Type': contentType, 'Cache-Control': name === '/index.html' ? 'no-cache' : 'public, max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin' } });
+  return new Response(siteFiles[name], { headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin' } });
 }
 
 export default {
