@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cademeuspontos",
+  "main": "worker.js",
+  "compatibility_date": "2025-11-06",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cademeuspontos-db",
+      "database_id": "b6cfe007-8ed8-4045-894e-21881646e26d"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["acesso@auth.arinhamelo.com.br"]
+    }
+  ]
+}
