@@ -192,14 +192,31 @@ async function handleApi(request, env) {
       return new Response(file.data, { headers: { 'Content-Type': file.content_type, 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
     }
     const purchaseMatch = path.match(/^\/api\/purchases\/([a-zA-Z0-9-]{8,80})$/);
-    if (request.method === 'PATCH' && purchaseMatch) {
-      let input; try { input = await bodyJson(request, 4096); } catch { return json({ error: 'Requisição inválida.' }, 400); }
-      if (!['pending', 'received'].includes(input.status)) return json({ error: 'Situação inválida.' }, 400);
+    if ((request.method === 'PATCH' || request.method === 'PUT') && purchaseMatch) {
+      let input; try { input = await bodyJson(request, 1_500_000); } catch { return json({ error: 'Requisição inválida.' }, 400); }
       const row = await env.DB.prepare('SELECT body FROM purchases WHERE id = ? AND email = ?').bind(purchaseMatch[1], email).first();
       if (!row) return json({ error: 'Compra não encontrada.' }, 404);
       const body = JSON.parse(row.body);
-      body.status = input.status;
-      if (input.status === 'received') body.received = body.expected; else delete body.received;
+      if (request.method === 'PUT') {
+        const clean = validPurchase({ ...body, ...input, id: body.id, attachmentData: '' });
+        if (!clean) return json({ error: 'Confira os dados do lançamento.' }, 400);
+        const next = { ...clean.body, status: body.status, createdAt: body.createdAt };
+        if (body.received !== undefined) next.received = Math.min(Number(body.received), next.expected);
+        next.expected = next.amount * next.factor;
+        if (next.received !== undefined) next.status = next.received >= next.expected ? 'received' : 'pending';
+        await env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(next), Date.now(), purchaseMatch[1], email).run();
+        return json(next);
+      }
+      if (input.receivedNow !== undefined) {
+        const amount = Number(input.receivedNow), current = Number(body.received || 0), left = Math.max(0, Number(body.expected) - current);
+        if (!Number.isFinite(amount) || amount <= 0 || amount > left + 0.000001) return json({ error: `Informe um valor entre 1 e ${Math.ceil(left)} pontos.` }, 400);
+        body.received = Math.min(Number(body.expected), current + amount);
+        body.status = body.received >= Number(body.expected) - 0.000001 ? 'received' : 'pending';
+      } else if (input.status === 'pending') {
+        body.status = 'pending'; delete body.received;
+      } else if (input.status === 'received') {
+        body.status = 'received'; body.received = body.expected;
+      } else return json({ error: 'Informe o recebimento ou uma situação válida.' }, 400);
       await env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(body), Date.now(), purchaseMatch[1], email).run();
       return json(body);
     }
