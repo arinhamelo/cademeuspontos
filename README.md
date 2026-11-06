@@ -1,27 +1,29 @@
 # Cadê meus pontos?
 
-Aplicação web para registrar compras bonificadas, acompanhar a previsão de crédito e preparar uma mensagem de cobrança.
+Aplicação web para registrar compras bonificadas, acompanhar a previsão de crédito e saber quando abrir uma reclamação para o parceiro.
 
 ## Funcionalidades
 
-- Tela inicial com aviso claro de que o app não acessa programas de fidelidade nem consulta saldos.
-- Cadastro guiado em etapas para parceiro, programa, valor, fator, data, prazo e informações da campanha.
-- Cálculo de pontos esperados e previsão de recebimento em dias corridos ou úteis, com ajuste manual da data.
+- Primeiro acesso por e-mail e chave temporária de uso único, sem senha ou cadastro manual.
+- Espaço pessoal criado no primeiro acesso e recuperado nos seguintes.
+- Compras, regulamentos e situação de crédito salvos na nuvem, vinculados ao e-mail autenticado.
+- Cadastro guiado para parceiro, programa, valor, fator, data, prazo e informações da campanha.
+- Cálculo de pontos e previsão de recebimento em dias corridos ou úteis, com ajuste manual.
 - Extrato com busca, filtros por situação e identificação automática de atrasos.
-- Detalhe da compra, opção de marcar pontos recebidos e texto de cobrança editável para copiar.
-- Dados e regulamentos salvos localmente no navegador. Anexos limitados a PDF/PNG de até 1 MB.
-- Logo vetorial original em SVG para o símbolo do aplicativo.
+- Anexos de regulamentos limitados a PDF/PNG de até 1 MB.
+- O app não acessa programas de fidelidade nem consulta saldos.
 
-## Executar
+## Cloudflare
 
-Abra `index.html` em um servidor estático. A aplicação não exige build nem dependências. Por exemplo:
+O site é servido por um Cloudflare Worker. Os dados de acesso e compras ficam no D1; as chaves de uso único são enviadas pelo serviço de e-mail do Cloudflare. Configure os bindings D1 e `send_email` definidos em `wrangler.jsonc` antes de publicar.
+
+Para regenerar o módulo com os arquivos da interface e publicar com Wrangler:
 
 ```bash
-python3 -m http.server 8000
+node build-assets.mjs
+npx wrangler deploy
 ```
 
-Depois, acesse `http://localhost:8000`.
+## Limites
 
-## Limites desta versão
-
-Os dados existem apenas no armazenamento local do navegador e não são sincronizados. Autenticação por e-mail, envio de chaves temporárias e armazenamento compartilhado seguro precisam de um serviço de backend e de e-mail. Nenhum serviço pago foi contratado ou integrado. Dias úteis são calculados de segunda a sexta, sem considerar feriados. O armazenamento local não substitui um backup.
+A chave expira em 10 minutos e pode ser usada uma vez. O Worker limita pedidos de chave por endereço de e-mail. Anexos têm limite de 1 MB. Dias úteis são calculados de segunda a sexta, sem considerar feriados.
