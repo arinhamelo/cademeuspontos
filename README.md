@@ -9,7 +9,7 @@ Aplicação web para registrar compras bonificadas, acompanhar a previsão de cr
 - Compras, regulamentos e situação de crédito salvos na nuvem, vinculados ao e-mail autenticado.
 - Cadastro guiado com nome da loja, programa, valor, fator, data e prazo corrido ou útil, com data prevista editável.
 - Extrato compacto e expansível, com busca, alertas de atraso e seção recolhida para itens recebidos.
-- Registro rápido de recebimentos integrais ou parciais, mantendo visível apenas o saldo pendente.
+- Registro rápido de recebimentos integrais ou parciais, mantendo visível apenas o saldo pendente. Todos os campos, inclusive os pontos recebidos e anexos, podem ser editados depois.
 - Edição de lançamentos e modelos de reclamação para ausência total ou crédito parcial.
 - Anexos de regulamentos limitados a PDF/PNG de até 1 MB.
 - O app não acessa programas de fidelidade nem consulta saldos.
