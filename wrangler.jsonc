@@ -4,6 +4,8 @@
   "main": "worker.js",
   "compatibility_date": "2025-11-06",
   "observability": { "enabled": true },
+  // Aviso diário por e-mail das compras com prazo vencido (12h UTC = 9h em Brasília)
+  "triggers": { "crons": ["0 12 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",

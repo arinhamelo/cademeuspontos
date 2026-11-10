@@ -6,6 +6,22 @@ const MAX_CODE_REQUESTS_PER_HOUR = 3;
 const MAX_ATTACHMENT_BYTES = 1024 * 1024;
 const SENDER = 'acesso@auth.arinhamelo.com.br';
 
+/** Data de hoje no Brasil (AAAA-MM-DD). */
+const todayBR = () => new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+/** Tabela nova (aditiva) das preferências de aviso por e-mail. As tabelas existentes não mudam. */
+let prefsReady = null;
+function ensurePrefs(env) {
+  prefsReady ??= env.DB.prepare('CREATE TABLE IF NOT EXISTS alert_prefs (email TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0, origin TEXT, updated_at INTEGER NOT NULL)').run().catch(error => { prefsReady = null; throw error; });
+  return prefsReady;
+}
+
+/** Data em que a compra foi marcada como recebida (usada no painel de atrasos). */
+function stampReceived(next, previous) {
+  if (next.status === 'received') next.receivedAt = previous?.status === 'received' && previous?.receivedAt ? previous.receivedAt : todayBR();
+  else delete next.receivedAt;
+}
+
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
   status,
   headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers },
@@ -184,6 +200,28 @@ async function handleApi(request, env) {
       return json((result.results || []).map(row => JSON.parse(row.body)));
     }
     if (request.method === 'POST' && path === '/api/purchases') return savePurchase(request, env, email);
+    if (path === '/api/preferences' && request.method === 'GET') {
+      await ensurePrefs(env);
+      const row = await env.DB.prepare('SELECT enabled FROM alert_prefs WHERE email = ?').bind(email).first();
+      return json({ dueAlerts: Number(row?.enabled || 0) === 1 });
+    }
+    if (path === '/api/preferences' && request.method === 'PUT') {
+      let input; try { input = await bodyJson(request, 4096); } catch { return json({ error: 'Requisição inválida.' }, 400); }
+      await ensurePrefs(env);
+      const enabled = input.dueAlerts === true ? 1 : 0;
+      await env.DB.prepare('INSERT INTO alert_prefs (email, enabled, origin, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET enabled = excluded.enabled, origin = excluded.origin, updated_at = excluded.updated_at')
+        .bind(email, enabled, url.origin, Date.now()).run();
+      return json({ dueAlerts: enabled === 1 });
+    }
+    const deleteMatch = path.match(/^\/api\/purchases\/([a-zA-Z0-9-]{8,80})$/);
+    if (request.method === 'DELETE' && deleteMatch) {
+      const result = await env.DB.batch([
+        env.DB.prepare('DELETE FROM attachments WHERE purchase_id = ? AND email = ?').bind(deleteMatch[1], email),
+        env.DB.prepare('DELETE FROM purchases WHERE id = ? AND email = ?').bind(deleteMatch[1], email),
+      ]);
+      if (Number(result[1]?.meta?.changes || 0) !== 1) return json({ error: 'Compra não encontrada.' }, 404);
+      return json({ ok: true });
+    }
     const attachmentMatch = path.match(/^\/api\/purchases\/([a-zA-Z0-9-]{8,80})\/attachment$/);
     if (request.method === 'GET' && attachmentMatch) {
       const file = await env.DB.prepare('SELECT name, content_type, data FROM attachments WHERE purchase_id = ? AND email = ?').bind(attachmentMatch[1], email).first();
@@ -209,6 +247,8 @@ async function handleApi(request, env) {
           next.status = 'pending';
           if (receivedTotal > 0) next.received = receivedTotal; else delete next.received;
         }
+        stampReceived(next, body);
+        if (body.alertedFor && body.alertedFor === next.dueDate) next.alertedFor = body.alertedFor;
         let attachmentBytes = null, contentType = '';
         if (clean.attachmentData) {
           const match = clean.attachmentData.match(/^data:(application\/pdf|image\/png);base64,([a-zA-Z0-9+/=]+)$/);
@@ -224,6 +264,7 @@ async function handleApi(request, env) {
         try { await env.DB.batch(statements); } catch { return json({ error: 'Não foi possível atualizar o lançamento.' }, 500); }
         return json(next);
       }
+      const previousStatus = body.status, previousReceivedAt = body.receivedAt;
       if (input.receivedTotal !== undefined) {
         const total = Number(input.receivedTotal), expected = Number(body.expected);
         if (!Number.isFinite(total) || total < 0 || total > expected) return json({ error: `Informe o total recebido entre 0 e ${Math.ceil(expected)} pontos.` }, 400);
@@ -240,6 +281,7 @@ async function handleApi(request, env) {
       } else if (input.status === 'received') {
         body.status = 'received'; body.received = body.expected;
       } else return json({ error: 'Informe o recebimento ou uma situação válida.' }, 400);
+      stampReceived(body, { status: previousStatus, receivedAt: previousReceivedAt });
       await env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify(body), Date.now(), purchaseMatch[1], email).run();
       return json(body);
     }
@@ -255,7 +297,44 @@ function staticResponse(path) {
   return new Response(siteFiles[name], { headers: { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin' } });
 }
 
+const pointsBR = value => Math.round(Number(value || 0)).toLocaleString('pt-BR');
+const dateBR = value => { const [y, m, d] = String(value || '').split('-'); return d ? `${d}/${m}/${y}` : '—'; };
+const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/**
+ * Aviso diário (Cron da Cloudflare): para quem ativou o aviso, um e-mail com as compras que passaram
+ * do prazo e ainda não foram recebidas. Cada compra é avisada uma vez por data prevista (campo alertedFor).
+ */
+async function sendDueAlerts(env) {
+  await ensurePrefs(env);
+  const today = todayBR();
+  const prefs = await env.DB.prepare('SELECT email, origin FROM alert_prefs WHERE enabled = 1').all();
+  for (const pref of prefs.results || []) {
+    try {
+      const rows = await env.DB.prepare('SELECT id, body FROM purchases WHERE email = ?').bind(pref.email).all();
+      const due = (rows.results || []).map(r => JSON.parse(r.body)).filter(p => p.status !== 'received' && p.dueDate && p.dueDate < today && Number(p.expected || 0) - Number(p.received || 0) > 0 && p.alertedFor !== p.dueDate);
+      if (!due.length) continue;
+      const origin = pref.origin || '';
+      const items = due.slice(0, 20).map(p => {
+        const left = Number(p.expected || 0) - Number(p.received || 0);
+        const link = origin ? `${origin}/?compra=${encodeURIComponent(p.id)}` : '';
+        return { p, left, link };
+      });
+      const text = `Olá! Estas compras passaram do prazo e os pontos ainda não foram registrados como recebidos:\n\n${items.map(({ p, left, link }) => `• ${p.partner} (${p.program}): ${pointsBR(left)} pontos, previstos para ${dateBR(p.dueDate)}${link ? `\n  ${link}` : ''}`).join('\n')}\n\nSe os pontos já entraram, registre o recebimento no app. Se não, abra a compra e use o modelo de reclamação pronto.\n\nPara deixar de receber estes avisos, desative-os na tela inicial do Cadê meus pontos.`;
+      const html = `<div style="font-family:Arial,sans-serif;color:#292333;max-width:560px;margin:auto"><h1 style="color:#7416a8;font-size:22px">Cadê meus pontos?</h1><p>Estas compras passaram do prazo e os pontos ainda não foram registrados como recebidos:</p><ul style="padding-left:18px">${items.map(({ p, left, link }) => `<li style="margin-bottom:10px"><strong>${escHtml(p.partner)}</strong> (${escHtml(p.program)})<br>${pointsBR(left)} pontos · previstos para ${dateBR(p.dueDate)}${link ? `<br><a href="${escHtml(link)}" style="color:#7416a8">Abrir compra e preparar a reclamação</a>` : ''}</li>`).join('')}</ul><p>Se os pontos já entraram, registre o recebimento no app.</p><p style="color:#827b8c;font-size:13px">Para deixar de receber estes avisos, desative-os na tela inicial do Cadê meus pontos.</p></div>`;
+      await env.EMAIL.send({ from: SENDER, to: pref.email, subject: due.length === 1 ? `Prazo vencido: pontos da ${due[0].partner}` : `${due.length} compras passaram do prazo`, text, html });
+      const now = Date.now();
+      await env.DB.batch(due.map(p => env.DB.prepare('UPDATE purchases SET body = ?, updated_at = ? WHERE id = ? AND email = ?').bind(JSON.stringify({ ...p, alertedFor: p.dueDate }), now, p.id, pref.email)));
+    } catch (error) {
+      console.error('Due alert failed for one account.', error?.name || 'Error');
+    }
+  }
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sendDueAlerts(env));
+  },
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/')) {
